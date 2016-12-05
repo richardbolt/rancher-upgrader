@@ -1,0 +1,4 @@
+package: upgrader
+import:
+- package: github.com/kelseyhightower/envconfig
+  version: ^1.2.0
