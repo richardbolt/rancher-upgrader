@@ -1,5 +1,5 @@
-// package main creates docker-compose.yml and rancher-compose.yml files
-// for use withdeployment systems such as Docker and Rancher.
+// package main updates services via Rancher in a blue-green deployment manner
+// offering the ability to run an external suite between upgrade and upgrade completion.
 package main
 
 import (
