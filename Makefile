@@ -8,5 +8,8 @@ build: export CGO_ENABLED=0
 build: 
 	go build -o ./$(BINARY_DIR)/$(BINARY) cmd/main.go
 
+local: 
+	go build -o ./$(BINARY_DIR)/$(BINARY) cmd/main.go
+
 clean:
 	rm ./$(BINARY_DIR)/$(BINARY) && rmdir ./$(BINARY_DIR)
