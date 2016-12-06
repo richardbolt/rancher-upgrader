@@ -3,13 +3,16 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"log"
 	"net/http"
+	"os/exec"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/kelseyhightower/envconfig"
@@ -25,6 +28,8 @@ type config struct {
 	RancherURL               string `required:"true" envconfig:"RANCHER_URL"`
 	RancherAPIVersion        string `default:"v1" envconfig:"RANCHER_API_VERSION"`
 	RancherStartServiceFirst bool   `default:"false" envconfig:"RANCHER_SERVICE_START_FIRST"`
+	// Cmd is a command that will be run and checked for exit status before moving onto the next stage of the upgrade.
+	Cmd string `default:"" envconfig:"UPGRADE_TEST_CMD"`
 	// Wait for at least x seconds (3600 by default) before abandoning the upgrade and rolling back automatically.
 	UpgradeWaitTimeout int `default:"3600" envconfig:"UPGRADE_WAIT_TIMEOUT"`
 }
@@ -125,8 +130,17 @@ func main() {
 			break
 		}
 	}
-	// We blocked above until the service was upgraded, now we can run any scripts to verify before we finish the upgrade.
-	// We will block on any and all of these scripts until we get the upgrade completed.
+
+	// We blocked above until the service was upgraded, now we can run a script to verify before we finish the upgrade.
+	// We will block on this script until we get the upgrade completed.
+	if cfg.Cmd != "" {
+		cmdParts := strings.Split(cfg.Cmd, " ")
+		if err := streamingExternalCmd(cmdParts[0], cmdParts[1:]...); err != nil {
+			log.Println("External service failed, rolling back the service upgrade")
+			rollback(cfg, serviceURL)
+			log.Fatal("Rolled back")
+		}
+	}
 
 	// POST to ?action=finishupgrade will finish the upgrade and ?action=rollback will rollback.
 	// Rolling back is dangerous since it will leave the other containers in a stopped state and they will
@@ -144,6 +158,7 @@ func main() {
 
 }
 
+// cancel cancels the service upgrade
 func cancel(cfg config, serviceURL string) {
 	req, err := http.NewRequest(http.MethodPost, serviceURL+"?action=cancelupgrade", nil)
 	req.SetBasicAuth(cfg.RancherAccessKey, cfg.RancherSecretKey)
@@ -157,6 +172,8 @@ func cancel(cfg config, serviceURL string) {
 	log.Println(string(response))
 }
 
+// rollback rolls the service back
+// TODO: restart the od containers to actually complete the service rollback.
 func rollback(cfg config, serviceURL string) {
 	req, err := http.NewRequest(http.MethodPost, serviceURL+"?action=rollback", nil)
 	req.SetBasicAuth(cfg.RancherAccessKey, cfg.RancherSecretKey)
@@ -168,4 +185,37 @@ func rollback(cfg config, serviceURL string) {
 	defer res.Body.Close()
 	response, err := ioutil.ReadAll(res.Body)
 	log.Println(string(response))
+}
+
+// streamingExternalCmd takes a command string with a list of string args and runs the command.
+// It streams the command output to stdout and stderr (to stderr) and returns an error if the command
+// exits with a non-zero status code.
+func streamingExternalCmd(command string, args ...string) error {
+	cmd := exec.Command(command, args...)
+	cmdReader, err := cmd.StdoutPipe()
+	if err != nil {
+		log.Println("Error creating StdoutPipe for external command", err)
+		return err
+	}
+	// Asyncify the output from the command and print it out.
+	scanner := bufio.NewScanner(cmdReader)
+	go func() {
+		for scanner.Scan() {
+			fmt.Printf(scanner.Text())
+		}
+	}()
+
+	log.Println("Starting external command")
+	err = cmd.Start()
+	if err != nil {
+		log.Println("Error with external command", err)
+		return err
+	}
+
+	err = cmd.Wait()
+	if err != nil {
+		log.Println("Error waiting for external command", err)
+		return err
+	}
+	return nil
 }
