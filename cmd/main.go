@@ -17,13 +17,14 @@ import (
 
 // config is the struct for holding the env variables passed into the program.
 type config struct {
-	RancherEnvID      string `required:"true" envconfig:"RANCHER_ENV_ID"`
-	RancherServiceID  string `required:"true" envconfig:"RANCHER_SERVICE_ID"`
-	BuildTag          string `default:"latest" envconfig:"BUILD_TAG"`
-	RancherAccessKey  string `required:"true" envconfig:"RANCHER_ACCESS_KEY"`
-	RancherSecretKey  string `required:"true" envconfig:"RANCHER_SECRET_KEY"`
-	RancherURL        string `required:"true" envconfig:"RANCHER_URL"`
-	RancherAPIVersion string `default:"v1" envconfig:"RANCHER_API_VERSION"`
+	RancherEnvID             string `required:"true" envconfig:"RANCHER_ENV_ID"`
+	RancherServiceID         string `required:"true" envconfig:"RANCHER_SERVICE_ID"`
+	BuildTag                 string `default:"latest" envconfig:"BUILD_TAG"`
+	RancherAccessKey         string `required:"true" envconfig:"RANCHER_ACCESS_KEY"`
+	RancherSecretKey         string `required:"true" envconfig:"RANCHER_SECRET_KEY"`
+	RancherURL               string `required:"true" envconfig:"RANCHER_URL"`
+	RancherAPIVersion        string `default:"v1" envconfig:"RANCHER_API_VERSION"`
+	RancherStartServiceFirst bool   `default:"false" envconfig:"RANCHER_SERVICE_START_FIRST"`
 	// Wait for at least x seconds (3600 by default) before abandoning the upgrade and rolling back automatically.
 	UpgradeWaitTimeout int `default:"3600" envconfig:"UPGRADE_WAIT_TIMEOUT"`
 }
@@ -66,9 +67,13 @@ func main() {
 	}
 	defer res.Body.Close()
 	launchConfig := struct {
+		State        string                 `json:"state"`
 		LaunchConfig map[string]interface{} `json:"launchConfig"`
 	}{}
 	json.NewDecoder(res.Body).Decode(&launchConfig)
+	if launchConfig.State != "active" {
+		log.Fatal("Exiting, Service state was not 'active', got: ", launchConfig.State)
+	}
 	// get the imageUuid as a string from LaunchConfig
 	imageUUID := launchConfig.LaunchConfig["imageUuid"].(string)
 	// Update the launchConfig image tag to the specified BuildTag.
@@ -80,7 +85,7 @@ func main() {
 			BatchSize:      1,
 			IntervalMillis: 10000,
 			LaunchConfig:   launchConfig.LaunchConfig,
-			StartFirst:     true,
+			StartFirst:     cfg.RancherStartServiceFirst,
 		},
 	})
 	req, err = http.NewRequest(http.MethodPost, serviceURL+"?action=upgrade", bytes.NewBuffer(data))
@@ -97,9 +102,10 @@ func main() {
 	for {
 		time.Sleep(time.Second * 10) // Block for 10 seconds each loop cycle.
 		t += waitInterval
-		if cfg.UpgradeWaitTimeout >= t {
-			rollback(cfg, serviceURL)
-			break
+		if cfg.UpgradeWaitTimeout < t {
+			log.Println("Timed out waiting for the upgrade to complete, cancelling.", cfg.UpgradeWaitTimeout, t)
+			cancel(cfg, serviceURL)
+			log.Fatal("Upgrade cancelled.") // log.Fatal exits the program.
 		}
 		// Check the upgrade status
 		req, err := http.NewRequest(http.MethodGet, serviceURL, nil)
@@ -113,7 +119,8 @@ func main() {
 			State string `json:"state"`
 		}{}
 		json.NewDecoder(res.Body).Decode(&service)
-		// State goes from "active" to "upgrading" and finally to "upgraded" where we exit
+		// State goes from "active" to "upgrading" and finally to "upgraded" where we exit. "removed" means we should have already exited
+		log.Println("State", service.State)
 		if service.State == "upgraded" {
 			break
 		}
@@ -121,7 +128,9 @@ func main() {
 	// We blocked above until the service was upgraded, now we can run any scripts to verify before we finish the upgrade.
 	// We will block on any and all of these scripts until we get the upgrade completed.
 
-	// POST to ?action=finishupgrade will finish the upgrade.
+	// POST to ?action=finishupgrade will finish the upgrade and ?action=rollback will rollback.
+	// Rolling back is dangerous since it will leave the other containers in a stopped state and they will
+	// need to be started here automatically.
 	req, err = http.NewRequest(http.MethodPost, serviceURL+"?action=finishupgrade", nil)
 	req.SetBasicAuth(cfg.RancherAccessKey, cfg.RancherSecretKey)
 	// NB: state becomes "finishing-upgrade" then "active"
@@ -132,10 +141,23 @@ func main() {
 	defer res.Body.Close()
 	response, err := ioutil.ReadAll(res.Body)
 	log.Println(string(response))
+
+}
+
+func cancel(cfg config, serviceURL string) {
+	req, err := http.NewRequest(http.MethodPost, serviceURL+"?action=cancelupgrade", nil)
+	req.SetBasicAuth(cfg.RancherAccessKey, cfg.RancherSecretKey)
+	// NB: state becomes "finishing-upgrade" then "active"
+	res, err := client.Do(req)
+	if err != nil {
+		log.Fatal(err.Error())
+	}
+	defer res.Body.Close()
+	response, err := ioutil.ReadAll(res.Body)
+	log.Println(string(response))
 }
 
 func rollback(cfg config, serviceURL string) {
-	// POST to ?action=finishupgrade will finish the upgrade.
 	req, err := http.NewRequest(http.MethodPost, serviceURL+"?action=rollback", nil)
 	req.SetBasicAuth(cfg.RancherAccessKey, cfg.RancherSecretKey)
 	// NB: state becomes "finishing-upgrade" then "active"
