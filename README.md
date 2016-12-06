@@ -10,15 +10,21 @@ Build
 
 Build the statically linked Linux binary:
 
-```make```
+```
+make
+```
 
 Clean:
 
-```make clean```
+```
+make clean
+```
 
 Build locally for your current platform:
 
-```make local```
+```
+make local
+```
 
 Usage
 -----
