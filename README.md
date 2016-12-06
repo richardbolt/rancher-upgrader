@@ -1,9 +1,9 @@
-Upgrader
-========
+Rancher Upgrader
+================
 
-Rancher upgrader upgrades a single service in place using the Rancher API.
-
-Eventually it will be able to execute an external task in between upgrading and finishing the upgrade, to verify a blue-green deployment, rolling back if necessary.
+Rancher Upgrader upgrades a single service in place using the Rancher API executing an external task in
+between upgrading and finishing the upgrade, to verify a blue-green deployment, rolling back if the
+command fails and finishing the upgrade if successful.
 
 Build
 -----
@@ -44,7 +44,14 @@ RANCHER_SECRET_KEY
 ### Optional Env Vars
 
 ```
+UPGRADE_TEST_CMD
 BUILD_TAG=latest
 UPGRADE_WAIT_TIMEOUT=3600
 RANCHER_API_VERSION=v1
+```
+
+Example of running with UPGRADE_TEST_CMD:
+
+```
+UPGRADE_TEST_CMD="./test-deploy.sh --url http://www.example.com/health -s 200" ./rancher-upgrader
 ```
