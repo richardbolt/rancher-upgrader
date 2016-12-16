@@ -89,24 +89,30 @@ func Upgrade(client *http.Client, cfg types.Config, svcConfig *types.Service, se
 	return nil
 }
 
-func FinishUpgrade(client *http.Client, cfg types.Config, svcConfig *types.Service, serviceURL string) error {
+// FinishUpgrade finishes the upgrade and blocks until the service is in an active state before returning.
+func FinishUpgrade(client *http.Client, cfg types.Config, svcConfig *types.Service, serviceURL string) (*types.Service, error) {
 	req, err := http.NewRequest(http.MethodPost, serviceURL+"?action=finishupgrade", nil)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	req.SetBasicAuth(cfg.RancherAccessKey, cfg.RancherSecretKey)
 	// NB: state becomes "finishing-upgrade" then "active"
 	res, err := client.Do(req)
 	if err != nil {
-		log.Fatal(err.Error())
+		return nil, err
 	}
 	defer res.Body.Close()
-	response, err := ioutil.ReadAll(res.Body)
+	svc := types.Service{}
+	err = json.NewDecoder(res.Body).Decode(&svc)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	log.Println(string(response))
-	return nil
+	log.Printf("Finishing upgrade of %s", svc.Name)
+	svcCfg, err := WaitFor(client, cfg, &svc, serviceURL, "active")
+	if err != nil {
+		return nil, err
+	}
+	return svcCfg, nil
 }
 
 // Cancel cancels the service upgrade and rolls back.

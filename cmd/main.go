@@ -107,11 +107,11 @@ func main() {
 	// need to be started here automatically.
 	if cfg.RancherFinishUpgrade {
 		log.Println("Service upgraded, finishing the upgrade")
-		err = actions.FinishUpgrade(client, cfg, svcConfig, serviceURL)
+		svc, err := actions.FinishUpgrade(client, cfg, svcConfig, serviceURL)
 		if err != nil {
 			log.Fatal(err.Error())
 		}
-		log.Println("Service upgrade successful, finished upgrade")
+		log.Printf("Service upgrade successful, finished upgrade of %s\n", svc.Name)
 	} else {
 		log.Println("Service upgrade successful, skipping the finish upgrade step")
 	}
