@@ -32,9 +32,6 @@ type config struct {
 	CheckInterval int `default:"1" envconfig:"CHECK_INTERVAL"`
 }
 
-// client is the http.Client to make GET requests
-var client *http.Client
-
 func init() {
 	log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
 }
@@ -46,8 +43,7 @@ func main() {
 		log.Fatal(err.Error())
 	}
 
-	client = &http.Client{}
-	ru := upgrader.New(client, cfg)
+	var ru upgrader.Upgrader = upgrader.New(&http.Client{}, cfg)
 
 	// Get the launchConfig for the given service. what we're after is the imageUuid from the launchConfig.
 	svcConfig, err := ru.GetServiceConfig()
