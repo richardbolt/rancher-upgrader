@@ -3,15 +3,13 @@
 package main
 
 import (
-	"fmt"
 	"log"
 	"net/http"
 	"regexp"
 	"strings"
 
-	"github.com/richardbolt/rancher-upgrader/actions"
-	"github.com/richardbolt/rancher-upgrader/types"
-
+	"github.com/richardbolt/rancher-upgrader/upgrader"
+	"github.com/richardbolt/rancher-upgrader/rancher"
 	"github.com/kelseyhightower/envconfig"
 )
 
@@ -42,23 +40,17 @@ func init() {
 }
 
 func main() {
-	var cfg types.Config
+	var cfg rancher.Config
 	err := envconfig.Process("", &cfg)
 	if err != nil {
 		log.Fatal(err.Error())
 	}
 
 	client = &http.Client{}
+	ru := upgrader.New(client, cfg)
 
-	// serviceURL is the Rancher url to make requests to for the service upgrade.
-	serviceURL := fmt.Sprintf("%s/%s/projects/%s/services/%s",
-		cfg.RancherURL,
-		cfg.RancherAPIVersion,
-		cfg.RancherEnvID,
-		cfg.RancherServiceID,
-	)
 	// Get the launchConfig for the given service. what we're after is the imageUuid from the launchConfig.
-	svcConfig, err := actions.GetServiceConfig(client, cfg, serviceURL)
+	svcConfig, err := ru.GetServiceConfig()
 	if svcConfig.Actions.Upgrade == "" {
 		log.Fatal("Exiting, service was not in an upgradeable state, got: ", svcConfig.State)
 	}
@@ -66,25 +58,25 @@ func main() {
 	imageUUID := svcConfig.LaunchConfig["imageUuid"].(string)
 	// Update the LaunchConfig image tag to the specified BuildTag.
 	imageUUID = regexp.MustCompile(":[a-z0-9]+$").ReplaceAllString(imageUUID, ":"+cfg.BuildTag)
-	svcConfig.LaunchConfig["imageUuid"] = imageUUID
+
 	// Make the upgrade request to the Rancher API for the given env and service
-	err = actions.Upgrade(client, cfg, svcConfig, serviceURL, types.Upgrade{
-		InServiceStrategy: types.InServiceStrategy{
+	err = ru.Upgrade(rancher.Upgrade{
+		InServiceStrategy: rancher.InServiceStrategy{
 			BatchSize:      svcConfig.Upgrade.InServiceStrategy.BatchSize,
 			IntervalMillis: svcConfig.Upgrade.InServiceStrategy.IntervalMillis,
 			LaunchConfig:   svcConfig.LaunchConfig,
 			StartFirst:     cfg.RancherStartServiceFirst,
 		},
-	})
+	}, upgrader.ImageUUID(imageUUID))
 	if err != nil {
 		log.Fatal(err.Error())
 	}
 	// Block until the service "state" goes from "active" to "upgrading" and finally to "upgraded".
 	// When we hit "upgraded" we can run external scripts to confirm, and then call ?action=finishupgrade to complete the upgrade.
-	_, err = actions.WaitFor(client, cfg, svcConfig, serviceURL, "upgraded")
+	_, err = ru.WaitFor("upgraded")
 	if err != nil {
 		log.Println("Cancelling upgrade")
-		actions.Cancel(client, cfg, svcConfig, serviceURL)
+		ru.Cancel()
 		log.Fatal("Cancelled upgrade")
 	}
 
@@ -92,9 +84,9 @@ func main() {
 	// We will block on this script until we get the upgrade completed.
 	if cfg.Cmd != "" {
 		cmdParts := strings.Split(cfg.Cmd, " ")
-		if err := actions.StreamingExternalCmd(cmdParts[0], cmdParts[1:]...); err != nil {
+		if err := upgrader.StreamingExternalCmd(cmdParts[0], cmdParts[1:]...); err != nil {
 			log.Println("External command failed, rolling back the service upgrade")
-			err := actions.Rollback(client, cfg, svcConfig, serviceURL)
+			err := ru.Rollback()
 			if err != nil {
 				log.Fatal("Failed to rollback", err.Error())
 			}
@@ -107,7 +99,7 @@ func main() {
 	// need to be started here automatically.
 	if cfg.RancherFinishUpgrade {
 		log.Println("Service upgraded, finishing the upgrade")
-		svc, err := actions.FinishUpgrade(client, cfg, svcConfig, serviceURL)
+		svc, err := ru.FinishUpgrade()
 		if err != nil {
 			log.Fatal(err.Error())
 		}
