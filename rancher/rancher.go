@@ -1,4 +1,4 @@
-package types
+package rancher
 
 // Config is the struct for holding the env variables passed into the program.
 type Config struct {
