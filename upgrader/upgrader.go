@@ -32,7 +32,7 @@ func New(c *http.Client, cfg rancher.Config) Upgrader {
 	return &rancherUpgrader{
 		svcURL: svcURL,
 		client: c,
-		cfg: cfg,
+		cfg:    cfg,
 	}
 }
 
@@ -115,15 +115,22 @@ func (r *rancherUpgrader) GetServiceConfig() (*rancher.Service, error) {
 // Upgrade kicks off the upgrade process with the given environment cfg and svcConfig.
 func (r *rancherUpgrader) Upgrade(payload rancher.Upgrade, options ...Option) error {
 	svcConfig, err := r.GetServiceConfig()
-	
+
 	if err != nil {
 		return err
 	}
-	
+
 	for _, o := range options {
 		o(svcConfig)
 	}
-	
+	// Validate some of the payload to make sure we have a valid paylod for the upgrade.
+	if payload.InServiceStrategy.BatchSize <= 0 {
+		payload.InServiceStrategy.BatchSize = 1 // Must upgrade at least 1 host at a time.
+	}
+	if payload.InServiceStrategy.IntervalMillis <= 0 {
+		payload.InServiceStrategy.IntervalMillis = 2000 // Default to a 2 second upgrade interval.
+	}
+
 	log.Printf("Upgrading %s in env %s to version tag '%s'\n", svcConfig.Name, r.cfg.RancherEnvID, r.cfg.BuildTag)
 	data, err := json.Marshal(payload)
 	if err != nil {
@@ -135,7 +142,14 @@ func (r *rancherUpgrader) Upgrade(payload rancher.Upgrade, options ...Option) er
 	}
 	req.Header.Add("Content-Type", "application/json")
 	req.SetBasicAuth(r.cfg.RancherAccessKey, r.cfg.RancherSecretKey)
-	_, err = r.client.Do(req)
+	res, err := r.client.Do(req)
+	if err == nil && res.StatusCode >= http.StatusBadRequest {
+		// Errors can also be if the given setup is no good
+		// and we get a 400 or higher response code.
+		defer res.Body.Close()
+		jsonBytes, _ := ioutil.ReadAll(res.Body)
+		err = errors.New(string(jsonBytes))
+	}
 	if err != nil {
 		return err
 	}
@@ -144,7 +158,7 @@ func (r *rancherUpgrader) Upgrade(payload rancher.Upgrade, options ...Option) er
 
 // FinishUpgrade finishes the upgrade and blocks until the service is in an active state before returning.
 func (r *rancherUpgrader) FinishUpgrade() (*rancher.Service, error) {
-	req, err := http.NewRequest(http.MethodPost, r.svcURL + "?action=finishupgrade", nil)
+	req, err := http.NewRequest(http.MethodPost, r.svcURL+"?action=finishupgrade", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -170,7 +184,7 @@ func (r *rancherUpgrader) FinishUpgrade() (*rancher.Service, error) {
 
 // Cancel cancels the service upgrade and rolls back.
 func (r *rancherUpgrader) Cancel() error {
-	req, err := http.NewRequest(http.MethodPost, r.svcURL + "?action=cancelupgrade", nil)
+	req, err := http.NewRequest(http.MethodPost, r.svcURL+"?action=cancelupgrade", nil)
 	if err != nil {
 		return err
 	}
@@ -203,7 +217,7 @@ func (r *rancherUpgrader) Cancel() error {
 
 // Rollback rolls the service back and makes sure containers are restarted.
 func (r *rancherUpgrader) Rollback() error {
-	req, err := http.NewRequest(http.MethodPost, r.svcURL + "?action=rollback", nil)
+	req, err := http.NewRequest(http.MethodPost, r.svcURL+"?action=rollback", nil)
 	req.SetBasicAuth(r.cfg.RancherAccessKey, r.cfg.RancherSecretKey)
 	// NB: state becomes "finishing-upgrade" then "active"
 	res, err := r.client.Do(req)
