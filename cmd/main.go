@@ -8,9 +8,10 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/richardbolt/rancher-upgrader/upgrader"
-	"github.com/richardbolt/rancher-upgrader/rancher"
 	"github.com/kelseyhightower/envconfig"
+
+	"github.com/richardbolt/rancher-upgrader/rancher"
+	"github.com/richardbolt/rancher-upgrader/upgrader"
 )
 
 // config is the struct for holding the env variables passed into the program.
@@ -43,7 +44,7 @@ func main() {
 		log.Fatal(err.Error())
 	}
 
-	var ru upgrader.Upgrader = upgrader.New(&http.Client{}, cfg)
+	ru := upgrader.New(&http.Client{}, cfg)
 
 	// Get the launchConfig for the given service. what we're after is the imageUuid from the launchConfig.
 	svcConfig, err := ru.GetServiceConfig()
@@ -56,14 +57,10 @@ func main() {
 	imageUUID = regexp.MustCompile(":[a-z0-9]+$").ReplaceAllString(imageUUID, ":"+cfg.BuildTag)
 
 	// Make the upgrade request to the Rancher API for the given env and service
-	err = ru.Upgrade(rancher.Upgrade{
-		InServiceStrategy: rancher.InServiceStrategy{
-			BatchSize:      svcConfig.Upgrade.InServiceStrategy.BatchSize,
-			IntervalMillis: svcConfig.Upgrade.InServiceStrategy.IntervalMillis,
-			LaunchConfig:   svcConfig.LaunchConfig,
-			StartFirst:     cfg.RancherStartServiceFirst,
-		},
-	}, upgrader.ImageUUID(imageUUID))
+	err = ru.Upgrade(
+		upgrader.StartFirst(cfg.RancherStartServiceFirst),
+		upgrader.ImageUUID(imageUUID),
+	)
 	if err != nil {
 		log.Fatal(err.Error())
 	}

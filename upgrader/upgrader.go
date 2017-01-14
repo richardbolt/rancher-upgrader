@@ -38,7 +38,7 @@ func New(c *http.Client, cfg rancher.Config) Upgrader {
 
 // Upgrader defines methods for service upgrading.
 type Upgrader interface {
-	Upgrade(payload rancher.Upgrade, options ...Option) error
+	Upgrade(options ...Option) error
 	WaitFor(desiredStates ...string) (*rancher.Service, error)
 	GetServiceConfig() (*rancher.Service, error)
 	FinishUpgrade() (*rancher.Service, error)
@@ -53,6 +53,14 @@ type Option func(*rancher.Service)
 func ImageUUID(uuid string) Option {
 	return func(s *rancher.Service) {
 		s.LaunchConfig["imageUuid"] = uuid
+		s.Upgrade.InServiceStrategy.LaunchConfig["imageUuid"] = uuid
+	}
+}
+
+// StartFirst allows for changing the start new containers first configuration.
+func StartFirst(startFirst bool) Option {
+	return func(s *rancher.Service) {
+		s.Upgrade.InServiceStrategy.StartFirst = startFirst
 	}
 }
 
@@ -113,26 +121,36 @@ func (r *rancherUpgrader) GetServiceConfig() (*rancher.Service, error) {
 }
 
 // Upgrade kicks off the upgrade process with the given environment cfg and svcConfig.
-func (r *rancherUpgrader) Upgrade(payload rancher.Upgrade, options ...Option) error {
+func (r *rancherUpgrader) Upgrade(options ...Option) error {
 	svcConfig, err := r.GetServiceConfig()
-
 	if err != nil {
 		return err
 	}
 
+	// Set the Upgrade on the svcConfig.
+	svcConfig.Upgrade = rancher.Upgrade{
+		InServiceStrategy: rancher.InServiceStrategy{
+			BatchSize:      svcConfig.Upgrade.InServiceStrategy.BatchSize,
+			IntervalMillis: svcConfig.Upgrade.InServiceStrategy.IntervalMillis,
+			LaunchConfig:   svcConfig.LaunchConfig,
+		},
+	}
+
+	// Apply the passed in Options
 	for _, o := range options {
 		o(svcConfig)
 	}
+
 	// Validate some of the payload to make sure we have a valid paylod for the upgrade.
-	if payload.InServiceStrategy.BatchSize <= 0 {
-		payload.InServiceStrategy.BatchSize = 1 // Must upgrade at least 1 host at a time.
+	if svcConfig.Upgrade.InServiceStrategy.BatchSize <= 0 {
+		svcConfig.Upgrade.InServiceStrategy.BatchSize = 1 // Must upgrade at least 1 host at a time.
 	}
-	if payload.InServiceStrategy.IntervalMillis <= 0 {
-		payload.InServiceStrategy.IntervalMillis = 2000 // Default to a 2 second upgrade interval.
+	if svcConfig.Upgrade.InServiceStrategy.IntervalMillis <= 0 {
+		svcConfig.Upgrade.InServiceStrategy.IntervalMillis = 2000 // Default to a 2 second upgrade interval.
 	}
 
 	log.Printf("Upgrading %s in env %s to version tag '%s'\n", svcConfig.Name, r.cfg.RancherEnvID, r.cfg.BuildTag)
-	data, err := json.Marshal(payload)
+	data, err := json.Marshal(svcConfig.Upgrade)
 	if err != nil {
 		return err
 	}
